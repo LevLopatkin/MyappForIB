@@ -8,6 +8,12 @@ import 'package:sqflite/sqflite.dart';
 class DatabaseHelper {
   static Database? _database;
 
+  Future<void> logout() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    // Дополнительный код для выхода пользователя
+  }
+
   Future<Database> get database async {
     if (_database != null) return _database!;
     _database = await initDatabase();
@@ -15,7 +21,7 @@ class DatabaseHelper {
   }
 
   Future<Database> initDatabase() async {
-    String path = '${await getDatabasesPath()}/products_database.db';
+    String path = '${await getDatabasesPath()}/inventory_database.db';
     return await openDatabase(
       path,
       version: 2,
@@ -32,16 +38,15 @@ class DatabaseHelper {
 
   Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
-      CREATE TABLE IF NOT EXISTS products(
+      CREATE TABLE IF NOT EXISTS inventory(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
-        typ TEXT,
-        makeday TEXT,
-        expirationday TEXT,
-        weight REAL,
-        nutritionalinfo REAL,
-        typemeasure TEXT,
-        quantity REAL
+        type TEXT,
+        purchaseDate TEXT,
+        nextMaintenanceDate TEXT,
+        condition TEXT,
+        notes TEXT,
+        quantity INTEGER
       )
     ''');
 
@@ -49,27 +54,18 @@ class DatabaseHelper {
       CREATE TABLE IF NOT EXISTS operation_history(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         action TEXT,
-        product_name TEXT,
+        item_name TEXT,
         timestamp TEXT,
         location TEXT
       )
     ''');
 
     await db.execute('''
-      CREATE TABLE IF NOT EXISTS shopping_list(
+      CREATE TABLE IF NOT EXISTS maintenance_schedule(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        is_checked INTEGER
-      )
-    ''');
-
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS notifications(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT,
-        message TEXT,
-        timestamp TEXT,
-        isRead INTEGER
+        item_name TEXT,
+        maintenanceDate TEXT,
+        notes TEXT
       )
     ''');
 
@@ -78,93 +74,60 @@ class DatabaseHelper {
 
   Future<void> _createTriggers(Database db) async {
     await db.execute('''
-      CREATE TRIGGER IF NOT EXISTS after_insert_products
-      AFTER INSERT ON products
+      CREATE TRIGGER IF NOT EXISTS after_insert_inventory
+      AFTER INSERT ON inventory
       BEGIN
-        INSERT INTO operation_history (action, product_name, timestamp, location)
+        INSERT INTO operation_history (action, item_name, timestamp, location)
         VALUES ('add', NEW.name, DATETIME('now'), 'Основной список');
       END
     ''');
 
     await db.execute('''
-      CREATE TRIGGER IF NOT EXISTS after_delete_products
-      AFTER DELETE ON products
+      CREATE TRIGGER IF NOT EXISTS after_delete_inventory
+      AFTER DELETE ON inventory
       BEGIN
-        INSERT INTO operation_history (action, product_name, timestamp, location)
+        INSERT INTO operation_history (action, item_name, timestamp, location)
         VALUES ('remove', OLD.name, DATETIME('now'), 'Основной список');
       END
     ''');
-
-    await db.execute('''
-      CREATE TRIGGER IF NOT EXISTS after_insert_shopping_list
-      AFTER INSERT ON shopping_list
-      BEGIN
-        INSERT INTO operation_history (action, product_name, timestamp, location)
-        VALUES ('add', NEW.name, DATETIME('now'), 'Список покупок');
-      END
-    ''');
-
-    await db.execute('''
-      CREATE TRIGGER IF NOT EXISTS after_delete_shopping_list
-      AFTER DELETE ON shopping_list
-      BEGIN
-        INSERT INTO operation_history (action, product_name, timestamp, location)
-        VALUES ('remove', OLD.name, DATETIME('now'), 'Список покупок');
-      END
-    ''');
-
-    await db.execute('''
-      CREATE TRIGGER IF NOT EXISTS after_update_shopping_list
-      AFTER UPDATE ON shopping_list
-      BEGIN
-        INSERT INTO operation_history (action, product_name, timestamp, location)
-        VALUES (
-          CASE WHEN NEW.is_checked = 1 THEN 'check' ELSE 'uncheck' END,
-          NEW.name,
-          DATETIME('now'),
-          'Список покупок'
-        );
-      END
-    ''');
   }
 
-  Future<int> insertProduct(Product product) async {
+  Future<int> insertInventoryItem(InventoryItem item) async {
     Database db = await database;
-    return await db.insert('products', product.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    return await db.insert('inventory', item.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<int> updateProduct(Product product) async {
+  Future<int> updateInventoryItem(InventoryItem item) async {
     Database db = await database;
     return await db.update(
-      'products',
-      product.toMap(),
+      'inventory',
+      item.toMap(),
       where: 'id = ?',
-      whereArgs: [product.id],
+      whereArgs: [item.id],
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
 
-
-  Future<List<Product>> getProducts() async {
+  Future<List<InventoryItem>> getInventoryItems() async {
     Database db = await database;
-    List<Map<String, dynamic>> maps = await db.query('products');
-    return List.generate(maps.length, (i) => Product.fromMap(maps[i]));
+    List<Map<String, dynamic>> maps = await db.query('inventory');
+    return List.generate(maps.length, (i) => InventoryItem.fromMap(maps[i]));
   }
 
-  Future<int> deleteProduct(int id) async {
+  Future<int> deleteInventoryItem(int id) async {
     Database db = await database;
-    return await db.delete('products', where: 'id = ?', whereArgs: [id]);
+    return await db.delete('inventory', where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<int> deleteAllProducts() async {
+  Future<int> deleteAllInventoryItems() async {
     Database db = await database;
-    return await db.delete('products');
+    return await db.delete('inventory');
   }
 
-  Future<bool> productExists(String name) async {
+  Future<bool> itemExists(String name) async {
     Database db = await database;
     List<Map<String, dynamic>> maps = await db.query(
-      'products',
+      'inventory',
       where: 'name = ?',
       whereArgs: [name],
     );
@@ -192,107 +155,70 @@ class DatabaseHelper {
     return await db.delete('operation_history');
   }
 
-  Future<int> insertShoppingItem(ShoppingItem item) async {
+  Future<int> insertMaintenanceSchedule(MaintenanceScheduleItem item) async {
     Database db = await database;
-    return await db.insert('shopping_list', item.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    return await db.insert('maintenance_schedule', item.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<List<ShoppingItem>> getShoppingList() async {
+  Future<List<MaintenanceScheduleItem>> getMaintenanceSchedule() async {
     Database db = await database;
-    List<Map<String, dynamic>> maps = await db.query('shopping_list');
-    return List.generate(maps.length, (i) => ShoppingItem.fromMap(maps[i]));
+    List<Map<String, dynamic>> maps = await db.query('maintenance_schedule');
+    return List.generate(maps.length, (i) => MaintenanceScheduleItem.fromMap(maps[i]));
   }
 
-  Future<int> updateShoppingItem(ShoppingItem item) async {
+  Future<int> deleteMaintenanceScheduleItem(int id) async {
     Database db = await database;
-    return await db.update(
-      'shopping_list',
-      item.toMap(),
-      where: 'id = ?',
-      whereArgs: [item.id],
-    );
+    return await db.delete('maintenance_schedule', where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<int> clearShoppingList() async {
+  Future<int> clearMaintenanceSchedule() async {
     Database db = await database;
-    return await db.delete('shopping_list');
+    return await db.delete('maintenance_schedule');
   }
 
-  Future<int> deleteShoppingItem(int id) async {
+  Future<List<InventoryItem>> getItemsNeedingMaintenance() async {
     Database db = await database;
-    return await db.delete('shopping_list', where: 'id = ?', whereArgs: [id]);
+    DateTime now = DateTime.now();
+    String nowFormatted = DateFormat('yyyy-MM-dd').format(now);
+
+    List<Map<String, dynamic>> maps = await db.rawQuery('''
+      SELECT * FROM inventory 
+      WHERE nextMaintenanceDate <= '$nowFormatted'
+    ''');
+
+    return List.generate(maps.length, (i) => InventoryItem.fromMap(maps[i]));
   }
 
-  Future<bool> isTableExists(String tableName) async {
+  // Method to clear all data
+  Future<void> clearAllData() async {
     Database db = await database;
-    var result = await db.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='$tableName'"
-    );
-    return result.isNotEmpty;
-  }
+    await db.delete('inventory');
+    await db.delete('operation_history');
+    await db.delete('maintenance_schedule');
 
-  Future<int> insertNotification(Notification notification) async {
-    Database db = await database;
-    return await db.insert('notifications', notification.toMap());
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
   }
-
-  Future<List<Notification>> getNotifications() async {
-    try {
-      Database db = await database;
-      List<Map<String, dynamic>> maps = await db.query('notifications');
-      return List.generate(maps.length, (i) => Notification.fromMap(maps[i]));
-    } catch (e) {
-      print('Ошибка при получении уведомлений: $e');
-      if (e.toString().contains('no such table')) {
-        return getNotifications(); // Повторная попытка после создания таблицы
-      }
-      return [];
-    }
-  }
-
-  Future<int> deleteNotification(int id) async {
-    Database db = await database;
-    return await db.delete('notifications', where: 'id = ?', whereArgs: [id]);
-  }
-
-  Future<List<Map<String, dynamic>>> getAllTables() async {
-    Database db = await database;
-    return await db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'");
-  }
-
-  Future<List<Map<String, dynamic>>> getTableContent(String tableName) async {
-    Database db = await database;
-    try {
-      return await db.query(tableName);
-    } catch (e) {
-      print('Ошибка при получении данных из таблицы $tableName: $e');
-      return [];
-    }
-  }
-
 }
 
-
-class Product {
+class InventoryItem {
   int? id;
   String name;
-  String typ;
-  String makeday;
-  String expirationday;
-  double weight;
-  double nutritionalinfo;
-  String typemeasure;
+  String type;
+  String purchaseDate;
+  String nextMaintenanceDate;
+  String condition;
+  String notes;
   int quantity;
 
-  Product({
+  InventoryItem({
     this.id,
     required this.name,
-    required this.typ,
-    required this.makeday,
-    required this.expirationday,
-    required this.weight,
-    required this.nutritionalinfo,
-    required this.typemeasure,
+    required this.type,
+    required this.purchaseDate,
+    required this.nextMaintenanceDate,
+    required this.condition,
+    required this.notes,
     this.quantity = 1,
   });
 
@@ -300,77 +226,63 @@ class Product {
     return {
       'id': id,
       'name': name,
-      'typ': typ,
-      'makeday': makeday,
-      'expirationday': expirationday,
-      'weight': weight,
-      'nutritionalinfo': nutritionalinfo,
-      'typemeasure': typemeasure,
+      'type': type,
+      'purchaseDate': purchaseDate,
+      'nextMaintenanceDate': nextMaintenanceDate,
+      'condition': condition,
+      'notes': notes,
       'quantity': quantity,
     };
   }
 
-  static Product fromMap(Map<String, dynamic> map) {
-    return Product(
+  static InventoryItem fromMap(Map<String, dynamic> map) {
+    return InventoryItem(
       id: map['id'],
       name: map['name'],
-      typ: map['typ'],
-      makeday: map['makeday'],
-      expirationday: map['expirationday'],
-      weight: map['weight'],
-      nutritionalinfo: map['nutritionalinfo'],
-      typemeasure: map['typemeasure'],
+      type: map['type'],
+      purchaseDate: map['purchaseDate'],
+      nextMaintenanceDate: map['nextMaintenanceDate'],
+      condition: map['condition'],
+      notes: map['notes'],
       quantity: map['quantity'] ?? 1,
     );
   }
 }
 
-class Department {
-  final String name;
-  final List<Product> products;
-
-  Department({required this.name, required this.products});
-}
-
-class Notification {
+class MaintenanceScheduleItem {
   int? id;
-  String title;
-  String message;
-  DateTime timestamp;
-  bool isRead;
+  String itemName;
+  String maintenanceDate;
+  String notes;
 
-  Notification({
+  MaintenanceScheduleItem({
     this.id,
-    required this.title,
-    required this.message,
-    required this.timestamp,
-    this.isRead = false,
+    required this.itemName,
+    required this.maintenanceDate,
+    required this.notes,
   });
 
   Map<String, dynamic> toMap() {
     return {
       'id': id,
-      'title': title,
-      'message': message,
-      'timestamp': timestamp.toIso8601String(),
-      'isRead': isRead ? 1 : 0,
+      'item_name': itemName,
+      'maintenanceDate': maintenanceDate,
+      'notes': notes,
     };
   }
 
-  static Notification fromMap(Map<String, dynamic> map) {
-    return Notification(
+  static MaintenanceScheduleItem fromMap(Map<String, dynamic> map) {
+    return MaintenanceScheduleItem(
       id: map['id'],
-      title: map['title'],
-      message: map['message'],
-      timestamp: DateTime.parse(map['timestamp']),
-      isRead: map['isRead'] == 1,
+      itemName: map['item_name'],
+      maintenanceDate: map['maintenanceDate'],
+      notes: map['notes'],
     );
   }
 }
 
-
-
 void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(MyApp());
 }
 
@@ -378,50 +290,38 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Холодильник',
+      title: 'Поиск инвентаря',
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: Scaffold(
-        appBar: AppBar(
-          title: Text('Холодильник'),
-          centerTitle: true,
-        ),
-        body: QRScannerPage(),
-      ),
+      home: InventoryScreen(),
     );
   }
 }
 
-
-class QRScannerPage extends StatefulWidget {
+class InventoryScreen extends StatefulWidget {
   @override
-  _QRScannerPageState createState() => _QRScannerPageState();
+  _InventoryScreenState createState() => _InventoryScreenState();
 }
 
-class _QRScannerPageState extends State<QRScannerPage> {
-  List<Department> _departments = [];
-  List<Product> _expiredProducts = []; // Список для хранения просроченных продуктов
+class _InventoryScreenState extends State<InventoryScreen> with WidgetsBindingObserver {
+  List<InventoryItem> _inventoryItems = [];
   List<HistoryItem> _historyItems = [];
-  String _searchQuery = ''; // Новое состояние для поискового запроса
-  bool _isSearching = false; // Флаг для отслеживания состояния
-
+  String _searchQuery = '';
+  bool _isSearching = false;
+  DatabaseHelper dbHelper = DatabaseHelper();
 
   @override
   void initState() {
     super.initState();
-    _loadProducts();
+    _loadInventoryItems();
     _loadHistory();
-    //_checkExpirationDates();
+    WidgetsBinding.instance.addObserver(this);
   }
 
-  List<Product> _getFilteredProducts() {
-    List<Product> allProducts = [];
-    for (var department in _departments) {
-      allProducts.addAll(department.products);
-    }
-    return allProducts.where((product) =>
-        product.name.toLowerCase().contains(_searchQuery.toLowerCase())
+  List<InventoryItem> _getFilteredItems() {
+    return _inventoryItems.where((item) =>
+        item.name.toLowerCase().contains(_searchQuery.toLowerCase())
     ).toList();
   }
 
@@ -432,25 +332,75 @@ class _QRScannerPageState extends State<QRScannerPage> {
       true,
       ScanMode.QR,
     );
-
     if (barcodeScanRes != '-1') {
-      Map<String, dynamic> productData = json.decode(barcodeScanRes);
+      Map<String, dynamic> itemData = json.decode(barcodeScanRes);
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => ResultPage(
-            scanResult: productData,
-            onConfirm: () => _addProduct(productData),
+            scanResult: itemData,
+            onConfirm: () => _addInventoryItem(itemData),
           ),
         ),
       );
     }
   }
 
+  void _addInventoryItem(Map<String, dynamic> itemData) {
+    setState(() {
+      InventoryItem newItem = InventoryItem(
+        name: itemData['name'],
+        type: itemData['type'],
+        purchaseDate: itemData['purchaseDate'],
+        nextMaintenanceDate: itemData['nextMaintenanceDate'],
+        condition: itemData['condition'],
+        notes: itemData['notes'],
+        quantity: 1,
+      );
+
+      dbHelper.insertInventoryItem(newItem);
+      _inventoryItems.add(newItem);
+
+      _addHistoryItem(HistoryItem(
+        action: 'add',
+        itemName: newItem.name,
+        timestamp: DateTime.now(),
+        location: 'Основной список',
+      ));
+    });
+    _saveInventoryItems();
+  }
+
+  void _deleteInventoryItem(InventoryItem item) {
+    setState(() {
+      dbHelper.deleteInventoryItem(item.id!);
+      _inventoryItems.remove(item);
+
+      _addHistoryItem(HistoryItem(
+        action: 'remove',
+        itemName: item.name,
+        timestamp: DateTime.now(),
+        location: 'Основной список',
+      ));
+    });
+    _saveInventoryItems();
+  }
+
+  Future<void> _loadInventoryItems() async {
+    _inventoryItems = await dbHelper.getInventoryItems();
+    setState(() {});
+  }
+
+  Future<void> _saveInventoryItems() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    final encodedItems = jsonEncode(_inventoryItems.map((item) => item.toMap()).toList());
+    await prefs.setString('inventory', encodedItems);
+  }
+
   void _saveHistory() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     List<String> historyJson = _historyItems.map((item) => jsonEncode(item.toMap())).toList();
-    await prefs.setStringList('history', historyJson);
+    await prefs.setString('history', historyJson as String);
   }
 
   void _loadHistory() async {
@@ -463,152 +413,6 @@ class _QRScannerPageState extends State<QRScannerPage> {
     }
   }
 
-  DatabaseHelper dbHelper = DatabaseHelper();
-
-  void _addProduct(Map<String, dynamic> productData) {
-    setState(() {
-      Department? department = _departments.firstWhere(
-            (dept) => dept.name == productData['typ'],
-        orElse: () {
-          var newDept = Department(name: productData['typ'], products: []);
-          _departments.add(newDept);
-          return newDept;
-        },
-      );
-      int existingIndex = department.products.indexWhere((p) =>
-          p.name == productData['name'] &&
-          p.typ == productData['typ'] &&
-          p.makeday == productData['makeday'] &&
-          p.expirationday == productData['expirationday'] &&
-          p.weight == productData['weight'] &&
-          p.nutritionalinfo == productData['nutritionalinfo'] &&
-          p.typemeasure == productData['typemeasure']);
-      if (existingIndex != -1) {
-        department.products[existingIndex].quantity = (department.products[existingIndex].quantity ?? 0) + 1;
-      } else {
-        Product newProduct = Product(
-          name: productData['name'],
-          typ: productData['typ'],
-          expirationday: productData['expirationday'],
-          makeday: productData['makeday'],
-          weight: productData['weight'],
-          nutritionalinfo: productData['nutritionalinfo'],
-          typemeasure: productData['typemeasure'],
-          quantity: 1,
-        );
-        department.products.add(newProduct);
-
-        dbHelper.insertProduct(newProduct);
-
-        _addHistoryItem(HistoryItem(
-          action: 'add',
-          productName: newProduct.name,
-          timestamp: DateTime.now(),
-          location: 'Основной список',
-        ));
-
-        if (_getRemainingDays(newProduct.expirationday) == 'Просрочен') {
-          _expiredProducts.add(newProduct);
-        }
-      }
-    });
-    _removeExpiredProducts();
-    _saveProducts();
-  }
-
-
-  void _deleteProduct(Product product, int departmentIndex) async {
-    setState(() {
-      if (product.quantity > 1) {
-        // Если количество больше 1, уменьшаем на 1
-        product.quantity--;
-      } else {
-        // Если количество равно 1, удаляем продукт
-        _departments[departmentIndex].products.remove(product);
-        if (_departments[departmentIndex].products.isEmpty) {
-          _departments.removeAt(departmentIndex);
-        }
-      }
-
-      // Добавляем запись об удалении в историю
-      _addHistoryItem(HistoryItem(
-        action: 'remove',
-        productName: product.name,
-        timestamp: DateTime.now(),
-        location: 'Основной список',
-      ));
-    });
-
-    // Удаляем продукт из базы данных
-    await dbHelper.deleteProduct(product.id!);
-
-    // Сохраняем обновленный список продуктов
-    _saveProducts();
-  }
-
-
-  void _loadProducts() async {
-    final dbHelper = DatabaseHelper();
-    List<Product> products = await dbHelper.getProducts();
-    setState(() {
-      _departments.clear();
-      for (var product in products) {
-        Department department = _departments.firstWhere(
-              (dept) => dept.name == product.typ,
-          orElse: () {
-            var newDept = Department(name: product.typ, products: []);
-            _departments.add(newDept);
-            return newDept;
-          },
-        );
-        department.products.add(product);
-      }
-    });
-  }
-  void _saveProducts() async {
-    final dbHelper = DatabaseHelper();
-    await dbHelper.deleteAllProducts();
-    for (var department in _departments) {
-      for (var product in department.products) {
-        await dbHelper.insertProduct(product);
-      }
-    }
-  }
-
-
-  void _removeExpiredProducts() {
-    for (var department in _departments) {
-      department.products.removeWhere((product) {
-        if (_getRemainingDays(product.expirationday) == 'Просрочен') {
-          _expiredProducts.add(product);
-          _addHistoryItem(HistoryItem(
-            action: 'remove',
-            productName: product.name,
-            timestamp: DateTime.now(),
-            location: 'Основной список',
-          ));
-          return true;
-        }
-        return false;
-      });
-    }
-    _departments.removeWhere((department) => department.products.isEmpty);
-  }
-
-  String _getRemainingDays(String expirationDateStr) {
-    DateTime expirationDate = DateTime.parse(expirationDateStr);
-    DateTime now = DateTime.now();
-    int remainingDays = expirationDate.difference(now).inDays;
-
-    if (remainingDays < 0) {
-      return 'Просрочен';
-    } else if (remainingDays == 0) {
-      return 'Истекает сегодня';
-    } else {
-      return '${remainingDays+1} дн.';
-    }
-  }
-
   void _addHistoryItem(HistoryItem item) {
     setState(() {
       _historyItems.add(item);
@@ -616,24 +420,65 @@ class _QRScannerPageState extends State<QRScannerPage> {
     _saveHistory();
   }
 
-  List<Product> _getExpiringProducts() {
-    List<Product> expiringProducts = [];
+  String _getDaysUntilMaintenance(String maintenanceDateStr) {
+    DateTime maintenanceDate = DateTime.parse(maintenanceDateStr);
     DateTime now = DateTime.now();
+    DateTime today = DateTime(now.year, now.month, now.day);
+    int remainingDays = maintenanceDate.difference(today).inDays;
 
-    for (var department in _departments) {
-      for (var product in department.products) {
-        DateTime expirationDate = DateTime.parse(product.expirationday);
-        int daysUntilExpiration = expirationDate.difference(now).inDays;
-
-        if (daysUntilExpiration <= 1 && daysUntilExpiration >= 0) {
-          expiringProducts.add(product);
-        }
-      }
+    if (remainingDays < 0) {
+      return 'Требуется ТО';
+    } else if (remainingDays == 0) {
+      return 'ТО сегодня';
+    } else {
+      return '${remainingDays} дн. до ТО';
     }
-
-    return expiringProducts;
   }
 
+  // Method to show the clear data confirmation dialog
+  /*Future<void> _showClearDataConfirmationDialog() async {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Подтверждение очистки данных'),
+          content: const SingleChildScrollView(
+            child: ListBody(
+              children: <Widget>[
+                Text('Вы уверены, что хотите удалить все данные?'),
+                Text('Это действие нельзя будет отменить.'),
+              ],
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Отмена'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            TextButton(
+              child: const Text('Очистить', style: TextStyle(color: Colors.red)),
+              onPressed: () {
+                _clearAllData();
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Method to clear all data
+  Future<void> _clearAllData() async {
+    await dbHelper.clearAllData();
+    setState(() {
+      _inventoryItems.clear();
+      _historyItems.clear();
+    });
+  }*/
 
   @override
   Widget build(BuildContext context) {
@@ -643,7 +488,7 @@ class _QRScannerPageState extends State<QRScannerPage> {
             ? TextField(
           autofocus: true,
           decoration: InputDecoration(
-            hintText: 'Поиск продукта...',
+            hintText: 'Поиск инвентаря...',
             border: InputBorder.none,
           ),
           onChanged: (value) {
@@ -652,7 +497,7 @@ class _QRScannerPageState extends State<QRScannerPage> {
             });
           },
         )
-            : Text('Поиск продуктов'),
+            : Text('Инвентарь'),
         actions: [
           IconButton(
             icon: Icon(_isSearching ? Icons.close : Icons.search),
@@ -669,111 +514,104 @@ class _QRScannerPageState extends State<QRScannerPage> {
       ),
       body: _searchQuery.isEmpty
           ? ListView.builder(
-        itemCount: _departments.length,
+        itemCount: _inventoryItems.length,
         itemBuilder: (context, index) {
-          return ExpansionTile(
-            title: Text(_departments[index].name),
-            children: _departments[index].products.map((product) {
-              return Dismissible(
-                key: UniqueKey(),
-                background: Container(
-                  color: Colors.red,
-                  child: Icon(Icons.delete, color: Colors.white),
-                  alignment: Alignment.centerRight,
-                  padding: EdgeInsets.only(right: 20),
-                ),
-                direction: DismissDirection.endToStart,
-                onDismissed: (direction) {
-                  _deleteProduct(product, index);
-                },
-                child: ListTile(
-                  title: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(child: Text(product.name)),
-                      Text(
-                        '${product.quantity} шт. - ${_getRemainingDays(product.expirationday)}',
-                        style: TextStyle(
-                          color: _getRemainingDays(product.expirationday) == 'Просрочен'
-                              ? Colors.red
-                              : _getRemainingDays(product.expirationday) == 'Истекает сегодня'
-                              ? Colors.orange
-                              : Colors.green,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+          final item = _inventoryItems[index];
+          String maintenanceStatus = _getDaysUntilMaintenance(item.nextMaintenanceDate);
 
-                    ],
+          return Dismissible(
+            key: UniqueKey(),
+            background: Container(
+              color: Colors.red,
+              child: Icon(Icons.delete, color: Colors.white),
+              alignment: Alignment.centerRight,
+              padding: EdgeInsets.only(right: 20),
+            ),
+            direction: DismissDirection.endToStart,
+            onDismissed: (direction) {
+              _deleteInventoryItem(item);
+            },
+            child: ListTile(
+              title: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(child: Text(item.name)),
+                  Text(
+                    maintenanceStatus,
+                    style: TextStyle(
+                      color: maintenanceStatus == 'Требуется ТО' ? Colors.red : Colors.green,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                  subtitle: Text('${product.nutritionalinfo} ккал'),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ProductDetailsPage(product: product),
-                      ),
-                    );
-                  },
-                  trailing: IconButton(
-                    icon: Icon(Icons.delete),
-                    onPressed: () {
-                      showDialog(
-                        context: context,
-                        builder: (BuildContext context) {
-                          return AlertDialog(
-                            title: Text('Удалить продукт'),
-                            content: Text('Вы уверены, что хотите удалить ${product.name}?'),
-                            actions: <Widget>[
-                              TextButton(
-                                child: Text('Отмена'),
-                                onPressed: () {
-                                  Navigator.of(context).pop();
-                                },
-                              ),
-                              TextButton(
-                                child: Text('Удалить'),
-                                onPressed: () {
-                                  _deleteProduct(product, index);
-                                  Navigator.of(context).pop();
-                                },
-                              ),
-                            ],
-                          );
-                        },
+                ],
+              ),
+              subtitle: Text('Тип: ${item.type}'),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ItemDetailsPage(item: item),
+                  ),
+                );
+              },
+              trailing: IconButton(
+                icon: Icon(Icons.delete),
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (BuildContext context) {
+                      return AlertDialog(
+                        title: Text('Удалить инвентарь'),
+                        content: Text('Вы уверены, что хотите удалить ${item.name}?'),
+                        actions: <Widget>[
+                          TextButton(
+                            child: Text('Отмена'),
+                            onPressed: () {
+                              Navigator.of(context).pop();
+                            },
+                          ),
+                          TextButton(
+                            child: Text('Удалить'),
+                            onPressed: () {
+                              _deleteInventoryItem(item);
+                              Navigator.of(context).pop();
+                            },
+                          ),
+                        ],
                       );
                     },
-                  ),
-                ),
-              );
-            }).toList(),
+                  );
+                },
+              ),
+            ),
           );
         },
       )
           : ListView.builder(
-        itemCount: _getFilteredProducts().length,
+        itemCount: _getFilteredItems().length,
         itemBuilder: (context, index) {
-          final product = _getFilteredProducts()[index];
-          String remainingDays = _getRemainingDays(product.expirationday);
+          final item = _getFilteredItems()[index];
+          String maintenanceStatus = _getDaysUntilMaintenance(item.nextMaintenanceDate);
           return ListTile(
             title: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(child: Text(product.name)),
+                Expanded(child: Text(item.name)),
                 Text(
-                  remainingDays,
+                  maintenanceStatus,
                   style: TextStyle(
-                    color: remainingDays == 'Просрочен' ? Colors.red : Colors.green,
+                    color: maintenanceStatus == 'Требуется ТО' ? Colors.red : Colors.green,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ],
             ),
-            subtitle: Text('${product.nutritionalinfo} ккал'),
+            subtitle: Text('Тип: ${item.type}'),
             onTap: () {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => ProductDetailsPage(product: product),
+                  builder: (context) => ItemDetailsPage(item: item),
                 ),
               );
             },
@@ -793,20 +631,19 @@ class _QRScannerPageState extends State<QRScannerPage> {
               tooltip: 'Сканировать QR-код',
             ),
             IconButton(
-              icon: Icon(Icons.shopping_cart),
+              icon: Icon(Icons.build),
               onPressed: () {
-                  Navigator.push(
+                Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => ShoppingListPage(
-                onHistoryItemAdded: (historyItem) {
-                  setState(() {
-                    _historyItems.add(historyItem);
-                  });
-                },
-              )),
-              );
+                  MaterialPageRoute(builder: (context) => MaintenanceSelectionPage(
+                    onMaintenanceCompleted: () {
+                      _loadInventoryItems();
+                      _loadHistory();
+                    },
+                  )),
+                );
               },
-              tooltip: 'Список покупок',
+              tooltip: 'Тех. Обслуживание',
             ),
             IconButton(
               icon: Icon(Icons.history),
@@ -816,28 +653,34 @@ class _QRScannerPageState extends State<QRScannerPage> {
                   MaterialPageRoute(builder: (context) => HistoryPage(historyItems: _historyItems)),
                 );
               },
-              tooltip: 'Аналитика',
+              tooltip: 'История',
             ),
-            IconButton(
-              icon: Icon(Icons.notifications),
-              onPressed: () {
-                List<Product> expiringProducts = _getExpiringProducts();
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => NotificationsPage(expiringProducts: expiringProducts)),
-                );
-              },
-              tooltip: 'Уведомления',
-            ),
+            // Add the clear data button
+            /*IconButton(
+              icon: Icon(Icons.delete_forever, color: Colors.red),
+              onPressed: _showClearDataConfirmationDialog,
+              tooltip: 'Очистить все данные',
+            ),*/
           ],
         ),
       ),
-      floatingActionButton: null, // Удаляем плавающую кнопку действия
-
     );
   }
-}
 
+  @override
+  void dispose() {
+    _saveInventoryItems();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _saveInventoryItems();
+    }
+  }
+}
 
 class ResultPage extends StatelessWidget {
   final Map<String, dynamic> scanResult;
@@ -857,7 +700,7 @@ class ResultPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Детали продукта:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text('Детали инвентаря:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               SizedBox(height: 16),
               Table(
                 border: TableBorder.all(),
@@ -898,16 +741,16 @@ class ResultPage extends StatelessWidget {
   }
 }
 
+class ItemDetailsPage extends StatelessWidget {
+  final InventoryItem item;
 
-class ProductDetailsPage extends StatelessWidget {
-  final Product product;
-  ProductDetailsPage({required this.product});
+  ItemDetailsPage({required this.item});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(product.name),
+        title: Text(item.name),
       ),
       body: SingleChildScrollView(
         child: Padding(
@@ -915,12 +758,12 @@ class ProductDetailsPage extends StatelessWidget {
           child: Table(
             border: TableBorder.all(),
             children: [
-              _buildTableRow('Название', product.name),
-              _buildTableRow('Тип', product.typ),
-              _buildTableRow('Дата изготовления', DateFormat('dd.MM.yyyy').format(DateTime.parse(product.makeday))),
-              _buildTableRow('Годен до', DateFormat('dd.MM.yyyy').format(DateTime.parse(product.expirationday))),
-              _buildTableRow('Вес', '${product.weight} ${product.typemeasure}'),
-              _buildTableRow('Пищевая ценность', '${product.nutritionalinfo} ${'ккал'}'),
+              _buildTableRow('Название', item.name),
+              _buildTableRow('Тип', item.type),
+              _buildTableRow('Последнее ТО', DateFormat('dd.MM.yyyy').format(DateTime.parse(item.purchaseDate))),
+              _buildTableRow('Следующее ТО', DateFormat('dd.MM.yyyy').format(DateTime.parse(item.nextMaintenanceDate))),
+              _buildTableRow('Состояние', item.condition),
+              _buildTableRow('Заметки', item.notes),
             ],
           ),
         ),
@@ -938,82 +781,104 @@ class ProductDetailsPage extends StatelessWidget {
   }
 }
 
+class MaintenanceSelectionPage extends StatefulWidget {
+  final VoidCallback onMaintenanceCompleted;
 
-class ShoppingListPage extends StatefulWidget {
-  final Function(HistoryItem) onHistoryItemAdded;
-  ShoppingListPage({required this.onHistoryItemAdded});
+  MaintenanceSelectionPage({Key? key, required this.onMaintenanceCompleted}) : super(key: key);
+
   @override
-  _ShoppingListPageState createState() => _ShoppingListPageState();
+  _MaintenanceSelectionPageState createState() => _MaintenanceSelectionPageState();
 }
 
-class _ShoppingListPageState extends State<ShoppingListPage> {
-  List<ShoppingItem> shoppingList = [];
-  TextEditingController _textFieldController = TextEditingController();
+class _MaintenanceSelectionPageState extends State<MaintenanceSelectionPage> {
+  DatabaseHelper dbHelper = DatabaseHelper();
+  List<InventoryItem> _itemsNeedingMaintenance = [];
 
   @override
   void initState() {
     super.initState();
-    _loadShoppingList();
+    _loadItemsNeedingMaintenance();
   }
 
-  void _loadShoppingList() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    setState(() {
-      List<String>? savedList = prefs.getStringList('shopping_list');
-      if (savedList != null) {
-        shoppingList = savedList.map((item) => ShoppingItem.fromMap(jsonDecode(item))).toList();
-      }
-    });
+  Future<void> _loadItemsNeedingMaintenance() async {
+    _itemsNeedingMaintenance = await dbHelper.getItemsNeedingMaintenance();
+    setState(() {});
   }
 
-  void _saveShoppingList() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    List<String> saveList = shoppingList.map((item) => jsonEncode(item.toMap())).toList();
-    await prefs.setStringList('shopping_list', saveList);
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Выбор инвентаря для ТО'),
+      ),
+      body: _itemsNeedingMaintenance.isEmpty
+          ? Center(child: Text('Нет инвентаря, требующего ТО.'))
+          : ListView.builder(
+        itemCount: _itemsNeedingMaintenance.length,
+        itemBuilder: (context, index) {
+          final item = _itemsNeedingMaintenance[index];
+          return ListTile(
+            title: Text(item.name),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => PerformMaintenancePage(item: item,
+                            onMaintenancePerformed: _updateMaintenanceDate,
+                            onMaintenanceCompleted: widget
+                                .onMaintenanceCompleted),
+                      ),
+                    );
+                  },
+                  child: Text('Провести ТО'),
+                ),
+                SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    _showDisposalConfirmationDialog(item);
+                  },
+                  child: Text('Утилизировать'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 
-  void _addHistoryItem(HistoryItem item) {
-    setState(() {
-      widget.onHistoryItemAdded(item);
-    });
-    _saveShoppingList();
-  }
-
-  DatabaseHelper dbHelper = DatabaseHelper();
-
-  void _addItem() {
-    showDialog(
+  Future<void> _showDisposalConfirmationDialog(InventoryItem item) async {
+    return showDialog<void>(
       context: context,
-      builder: (context) {
+      barrierDismissible: false, // user must tap button!
+      builder: (BuildContext context) {
         return AlertDialog(
-          title: Text('Добавить в список покупок'),
-          content: TextField(
-            controller: _textFieldController,
-            decoration: InputDecoration(hintText: "Введите название продукта"),
-            autofocus: true,
+          title: const Text('Подтверждение утилизации'),
+          content: SingleChildScrollView(
+            child: ListBody(
+              children: <Widget>[
+                Text('Вы уверены, что хотите утилизировать ${item.name}?'),
+                Text('Это действие нельзя будет отменить.'),
+              ],
+            ),
           ),
           actions: <Widget>[
             TextButton(
-              child: Text('Отмена'),
+              child: const Text('Отмена'),
               onPressed: () {
                 Navigator.of(context).pop();
               },
             ),
             TextButton(
-              child: Text('Добавить'),
+              child: const Text(
+                  'Утилизировать', style: TextStyle(color: Colors.red)),
               onPressed: () {
-                setState(() {
-                  if (_textFieldController.text.isNotEmpty) {
-                    shoppingList.add(ShoppingItem(name: _textFieldController.text));
-                    _addHistoryItem(HistoryItem(
-                      action: 'add',
-                      productName: _textFieldController.text,
-                      timestamp: DateTime.now(),
-                      location: 'Список покупок',
-                    ));
-                    _textFieldController.clear();
-                  }
-                });
+                _disposeItem(item);
                 Navigator.of(context).pop();
               },
             ),
@@ -1023,120 +888,123 @@ class _ShoppingListPageState extends State<ShoppingListPage> {
     );
   }
 
+  void _disposeItem(InventoryItem item) {
+    // Implement disposal logic here
+    DatabaseHelper dbHelper = DatabaseHelper();
+    dbHelper.deleteInventoryItem(item.id!);
+
+    setState(() {
+      _itemsNeedingMaintenance.remove(item);
+    });
+  }
+
+  void _updateMaintenanceDate(InventoryItem item, DateTime newDate) {
+    DatabaseHelper dbHelper = DatabaseHelper();
+
+    DateTime lastMaintenanceDate = DateTime(
+        newDate.year - 1, newDate.month, newDate.day);
+
+    setState(() {
+      item.nextMaintenanceDate = DateFormat('yyyy-MM-dd').format(newDate);
+      item.purchaseDate = DateFormat('yyyy-MM-dd').format(
+          lastMaintenanceDate); // Update lastMaintenanceDate
+      dbHelper.updateInventoryItem(item);
+      _loadItemsNeedingMaintenance(); // Refresh the list
+    });
+  }
+}
+
+  class PerformMaintenancePage extends StatefulWidget {
+  final InventoryItem item;
+  final Function(InventoryItem, DateTime) onMaintenancePerformed;
+  final VoidCallback onMaintenanceCompleted;
+
+  PerformMaintenancePage({Key? key, required this.item, required this.onMaintenancePerformed, required this.onMaintenanceCompleted}) : super(key: key);
+
+  @override
+  _PerformMaintenancePageState createState() => _PerformMaintenancePageState();
+}
+
+class _PerformMaintenancePageState extends State<PerformMaintenancePage> {
+  TextEditingController _maintenanceNotesController = TextEditingController();
+  DateTime _selectedDate = DateTime.now();
+
+  Future<void> _selectDate(BuildContext context) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2101),
+    );
+    if (picked != null && picked != _selectedDate)
+      setState(() {
+        _selectedDate = picked;
+      });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Список покупок'),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.add),
-            onPressed: _addItem,
-            tooltip: 'Добавить продукт',
-          ),
-        ],
+        title: Text('Проведение ТО'),
       ),
-      body: ListView.builder(
-        itemCount: shoppingList.length,
-        itemBuilder: (context, index) {
-          return Dismissible(
-            key: Key(shoppingList[index].name),
-            background: Container(
-              color: Colors.red,
-              child: Icon(Icons.delete, color: Colors.white),
-              alignment: Alignment.centerRight,
-              padding: EdgeInsets.only(right: 20),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Инвентарь: ${widget.item.name}', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            SizedBox(height: 16),
+            Text('Дата проведения ТО:'),
+            Row(
+              children: [
+                Text(DateFormat('dd.MM.yyyy').format(_selectedDate)),
+                IconButton(
+                  icon: Icon(Icons.calendar_today),
+                  onPressed: () => _selectDate(context),
+                ),
+              ],
             ),
-            direction: DismissDirection.endToStart,
-            onDismissed: (direction) {
-              setState(() {
-                String removedItemName = shoppingList[index].name;
-                shoppingList.removeAt(index);
-                _addHistoryItem(HistoryItem(
-                  action: 'remove',
-                  productName: removedItemName,
-                  timestamp: DateTime.now(),
-                  location: 'Список покупок',
-                ));
-              });
-            },
-            child: ListTile(
-              title: Text(
-                shoppingList[index].name,
-                style: TextStyle(
-                  decoration: TextDecoration.none,
-                ),
+            SizedBox(height: 16),
+            TextField(
+              controller: _maintenanceNotesController,
+              decoration: InputDecoration(
+                hintText: 'Заметки о ТО',
+                border: OutlineInputBorder(),
               ),
-              leading: GestureDetector(
-                onTap: () {
-                  setState(() {
-                    shoppingList[index].isChecked = !shoppingList[index].isChecked;
-                    _saveShoppingList();
-                    widget.onHistoryItemAdded(HistoryItem(
-                      action: shoppingList[index].isChecked ? 'check' : 'uncheck',
-                      productName: shoppingList[index].name,
-                      timestamp: DateTime.now(),
-                      location: 'Список покупок',
-                    ));
-                  });
-                },
-                child: Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: shoppingList[index].isChecked ? Colors.green : Colors.transparent,
-                    border: Border.all(color: Colors.grey),
-                  ),
-                  child: shoppingList[index].isChecked
-                      ? Icon(Icons.check, size: 16, color: Colors.white)
-                      : null,
-                ),
-              ),
-              onTap: () {
-                setState(() {
-                  shoppingList[index].isChecked = !shoppingList[index].isChecked;
-                  _addHistoryItem(HistoryItem(
-                    action: shoppingList[index].isChecked ? 'check' : 'uncheck',
-                    productName: shoppingList[index].name,
-                    timestamp: DateTime.now(),
-                    location: 'Список покупок',
-                  ));
-                });
+            ),
+            SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () {
+                _saveMaintenanceInfo();
               },
+              child: Text('Сохранить ТО'),
             ),
-          );
-        },
+          ],
+        ),
       ),
     );
   }
-}
 
-class ShoppingItem {
-  int? id;
-  String name;
-  bool isChecked;
-
-  ShoppingItem({this.id, required this.name, this.isChecked = false});
-
-  Map<String, dynamic> toMap() {
-    return {
-      'id': id,
-      'name': name,
-      'isChecked': isChecked ? 1 : 0,
-    };
-  }
-
-  static ShoppingItem fromMap(Map<String, dynamic> map) {
-    return ShoppingItem(
-      id: map['id'],
-      name: map['name'],
-      isChecked: map['isChecked'] == 1,
+  void _saveMaintenanceInfo() {
+    // Save the maintenance information to the database or shared preferences
+    DatabaseHelper dbHelper = DatabaseHelper();
+    MaintenanceScheduleItem newItem = MaintenanceScheduleItem(
+      itemName: widget.item.name,
+      maintenanceDate: DateFormat('yyyy-MM-dd').format(_selectedDate),
+      notes: _maintenanceNotesController.text,
     );
+    dbHelper.insertMaintenanceSchedule(newItem);
+
+    // Update the next maintenance date in the inventory
+    DateTime nextMaintenanceDate = _selectedDate.add(Duration(days: 365));
+    widget.onMaintenancePerformed(widget.item, nextMaintenanceDate);
+
+    // Pop the current screen and call the onMaintenanceCompleted callback
+    Navigator.pop(context);
+    widget.onMaintenanceCompleted();
   }
 }
-
-
 
 class HistoryPage extends StatefulWidget {
   final List<HistoryItem> historyItems;
@@ -1148,7 +1016,8 @@ class HistoryPage extends StatefulWidget {
 }
 
 class _HistoryPageState extends State<HistoryPage> {
-  DateTime _selectedDate = DateTime.now();
+  DateTime _startDate = DateTime.now().subtract(Duration(days: 7));
+  DateTime _endDate = DateTime.now();
   List<HistoryItem> _filteredItems = [];
 
   @override
@@ -1160,23 +1029,23 @@ class _HistoryPageState extends State<HistoryPage> {
   void _filterItems() {
     setState(() {
       _filteredItems = widget.historyItems.where((item) =>
-      item.timestamp.year == _selectedDate.year &&
-          item.timestamp.month == _selectedDate.month &&
-          item.timestamp.day == _selectedDate.day
+      item.timestamp.isAfter(_startDate.subtract(Duration(days: 1))) &&
+          item.timestamp.isBefore(_endDate.add(Duration(days: 1)))
       ).toList();
     });
   }
 
-  Future<void> _selectDate(BuildContext context) async {
-    final DateTime? picked = await showDatePicker(
+  Future<void> _selectDateRange(BuildContext context) async {
+    DateTimeRange? picked = await showDateRangePicker(
       context: context,
-      initialDate: _selectedDate,
       firstDate: DateTime(2000),
       lastDate: DateTime(2101),
+      initialDateRange: DateTimeRange(start: _startDate, end: _endDate),
     );
-    if (picked != null && picked != _selectedDate) {
+    if (picked != null) {
       setState(() {
-        _selectedDate = picked;
+        _startDate = picked.start;
+        _endDate = picked.end;
         _filterItems();
       });
     }
@@ -1186,20 +1055,14 @@ class _HistoryPageState extends State<HistoryPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('История действий'),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.calendar_today),
-            onPressed: () => _selectDate(context),
-          ),
-        ],
+        title: Text('История'),
       ),
       body: Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(8.0),
             child: Text(
-              'Дата: ${DateFormat('dd.MM.yyyy').format(_selectedDate)}',
+              'Период: ${DateFormat('dd.MM.yyyy').format(_startDate)} - ${DateFormat('dd.MM.yyyy').format(_endDate)}',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
           ),
@@ -1213,9 +1076,8 @@ class _HistoryPageState extends State<HistoryPage> {
                     item.action == 'add' ? Icons.add_circle : Icons.remove_circle,
                     color: item.action == 'add' ? Colors.green : Colors.red,
                   ),
-                  title: Text(item.productName),
-                  subtitle: Text('${item.action == 'add' ? 'Добавлено' : 'Удалено'} ${DateFormat('HH:mm').format(item.timestamp)}'),
-                  trailing: Text(item.location),
+                  title: Text(item.itemName),
+                  subtitle: Text('${item.action == 'add' ? 'Добавлено' : 'Удалено'} ${DateFormat('dd.MM.yyyy HH:mm').format(item.timestamp)}'),
                 );
               },
             ),
@@ -1228,13 +1090,13 @@ class _HistoryPageState extends State<HistoryPage> {
 
 class HistoryItem {
   final String action;
-  final String productName;
+  final String itemName;
   final DateTime timestamp;
   final String location;
 
   HistoryItem({
     required this.action,
-    required this.productName,
+    required this.itemName,
     required this.timestamp,
     required this.location,
   });
@@ -1242,7 +1104,7 @@ class HistoryItem {
   Map<String, dynamic> toMap() {
     return {
       'action': action,
-      'productName': productName,
+      'item_name': itemName,
       'timestamp': timestamp.toIso8601String(),
       'location': location,
     };
@@ -1251,85 +1113,9 @@ class HistoryItem {
   static HistoryItem fromMap(Map<String, dynamic> map) {
     return HistoryItem(
       action: map['action'],
-      productName: map['productName'],
+      itemName: map['item_name'],
       timestamp: DateTime.parse(map['timestamp']),
       location: map['location'],
     );
   }
 }
-
-
-class NotificationsPage extends StatelessWidget {
-  final List<Product> expiringProducts;
-
-  NotificationsPage({required this.expiringProducts});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('Уведомления'),
-      ),
-      body: expiringProducts.isEmpty
-          ? Center(child: Text('Нет уведомлений', style: TextStyle(fontSize: 18)))
-          : ListView.builder(
-        itemCount: expiringProducts.length,
-        itemBuilder: (context, index) {
-          Product product = expiringProducts[index];
-          DateTime expirationDate = DateTime.parse(product.expirationday);
-          int daysUntilExpiration = expirationDate.difference(DateTime.now()).inDays;
-
-          String message;
-          Color cardColor;
-          IconData iconData;
-
-          if (daysUntilExpiration < 0) {
-            message = 'Продукт просрочен';
-            cardColor = Colors.red[100]!;
-            iconData = Icons.error_outline;
-          } else if (daysUntilExpiration == 0) {
-            message = 'Срок годности истекает сегодня';
-            cardColor = Colors.red[100]!;
-            iconData = Icons.warning_amber_rounded;
-          } else {
-            message = 'Срок годности истекает завтра';
-            cardColor = Colors.orange[100]!;
-            iconData = Icons.warning_amber_rounded;
-          }
-
-
-          return Card(
-            elevation: 4,
-            margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: cardColor,
-            child: ListTile(
-              contentPadding: EdgeInsets.all(16),
-              leading: Icon(iconData, size: 48, color: Colors.grey[800]),
-              title: Text(
-                product.name,
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(height: 8),
-                  Text(message, style: TextStyle(fontSize: 16)),
-                  SizedBox(height: 4),
-                  Text(
-                    'Срок годности: ${DateFormat('dd.MM.yyyy').format(expirationDate)}',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-
-
-
-
